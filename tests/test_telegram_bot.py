@@ -195,7 +195,11 @@ def make_stream_lines(session_id, text_chunks):
         {"type": "system", "subtype": "init", "session_id": session_id},
     ]
     for chunk in text_chunks:
-        events.append({"type": "assistant", "subtype": "text", "content": chunk})
+        events.append({
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": chunk}]},
+            "session_id": session_id,
+        })
     events.append({"type": "result", "session_id": session_id, "result": "".join(text_chunks)})
     return [json.dumps(e).encode() + b"\n" for e in events]
 

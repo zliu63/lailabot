@@ -8,11 +8,17 @@ from lailabot.claude_code_runner import ClaudeCodeRunner
 
 
 def make_stream_lines(session_id, text_chunks):
-    """Build fake stream-json output as list of encoded lines."""
+    """Build fake stream-json output matching real Claude Code format."""
     events = []
     events.append({"type": "system", "subtype": "init", "session_id": session_id})
     for chunk in text_chunks:
-        events.append({"type": "assistant", "subtype": "text", "content": chunk})
+        events.append({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "text", "text": chunk}],
+            },
+            "session_id": session_id,
+        })
     events.append({"type": "result", "session_id": session_id, "result": "".join(text_chunks)})
     return [json.dumps(e).encode() + b"\n" for e in events]
 
@@ -88,8 +94,8 @@ async def test_ignores_non_text_events():
 
     events = [
         {"type": "system", "subtype": "init", "session_id": "s1"},
-        {"type": "assistant", "subtype": "tool_use", "content": "reading file"},
-        {"type": "assistant", "subtype": "text", "content": "actual text"},
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read"}]}, "session_id": "s1"},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "actual text"}]}, "session_id": "s1"},
         {"type": "tool_result", "content": "file contents"},
         {"type": "result", "session_id": "s1", "result": "actual text"},
     ]

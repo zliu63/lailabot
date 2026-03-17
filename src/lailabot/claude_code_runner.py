@@ -42,11 +42,16 @@ class ClaudeCodeRunner:
             except json.JSONDecodeError:
                 continue
 
-            if event.get("type") == "system" and event.get("subtype") == "init":
+            event_type = event.get("type")
+
+            if event_type == "system" and event.get("subtype") == "init":
                 session_id = event.get("session_id", session_id)
-            elif event.get("type") == "assistant" and event.get("subtype") == "text":
-                await on_chunk(event["content"])
-            elif event.get("type") == "result":
+            elif event_type == "assistant":
+                msg = event.get("message", {})
+                for block in msg.get("content", []):
+                    if block.get("type") == "text":
+                        await on_chunk(block["text"])
+            elif event_type == "result":
                 session_id = event.get("session_id", session_id)
 
         await proc.wait()
