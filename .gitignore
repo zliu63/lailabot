@@ -30,5 +30,8 @@ Thumbs.db
 .env
 .env.*
 
+# Claude Code
+.claude/
+
 # lailabot data
 .lailabot/
