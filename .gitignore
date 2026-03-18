@@ -35,3 +35,6 @@ Thumbs.db
 
 # lailabot data
 .lailabot/
+
+# launchd plist (contains user-specific config)
+com.lailabot.plist
