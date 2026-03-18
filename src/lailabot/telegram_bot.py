@@ -1,4 +1,7 @@
+import json
 import os
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from lailabot.session_manager import SessionManager
 from lailabot.claude_code_runner import ClaudeCodeRunner
@@ -16,6 +19,8 @@ class LailaBot:
         self.authorized_user_id = authorized_user_id
         self.session_manager = SessionManager(persistence_path=session_persistence_path)
         self.runner = ClaudeCodeRunner()
+        self._telegram_bot = None  # Set externally after Application is built
+        self.approval_server = None  # Set externally
 
     def _is_authorized(self, user_id: int) -> bool:
         return user_id == self.authorized_user_id
@@ -166,3 +171,44 @@ class LailaBot:
 
         for chunk in split_message(full_response):
             await update.message.reply_text(chunk)
+
+    async def handle_approval_request(self, approval_id: str, request_data: dict):
+        tool_name = request_data.get("tool_name", "Unknown")
+        tool_input = request_data.get("tool_input", {})
+        input_summary = json.dumps(tool_input, indent=2, ensure_ascii=False)
+        if len(input_summary) > 1000:
+            input_summary = input_summary[:1000] + "\n..."
+
+        text = f"Permission Request\n\nTool: {tool_name}\nInput:\n{input_summary}"
+
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Approve", callback_data=f"approve:{approval_id}"),
+                InlineKeyboardButton("Deny", callback_data=f"deny:{approval_id}"),
+            ]
+        ])
+
+        await self._telegram_bot.send_message(
+            chat_id=self.authorized_user_id,
+            text=text,
+            reply_markup=keyboard,
+        )
+
+    async def handle_approval_callback(self, update, context):
+        query = update.callback_query
+        if not self._is_authorized(query.from_user.id):
+            return
+
+        data = query.data
+        if not data or ":" not in data:
+            return
+
+        action, approval_id = data.split(":", 1)
+        allow = action == "approve"
+
+        if self.approval_server:
+            self.approval_server.resolve(approval_id, allow=allow)
+
+        label = "Approved" if allow else "Denied"
+        await query.answer(label)
+        await query.edit_message_reply_markup(reply_markup=None)

@@ -271,3 +271,77 @@ async def test_send_command_routes_to_specific_session():
         # Verify it ran in dir_b's working directory
         call_kwargs = mock_exec.call_args[1]
         assert call_kwargs["cwd"] == dir_b
+
+
+# --- Approval flow ---
+
+
+@pytest.mark.asyncio
+async def test_approval_request_sends_telegram_message_with_keyboard():
+    """When the approval server gets a request, bot sends a message with Approve/Deny buttons."""
+    from telegram import InlineKeyboardMarkup
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = make_bot(tmp)
+
+        # Simulate the approval server calling on_request
+        fake_bot_instance = mock.AsyncMock()
+        bot._telegram_bot = fake_bot_instance
+
+        request_data = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "rm -rf /tmp/test"},
+        }
+
+        await bot.handle_approval_request("approval-123", request_data)
+
+        fake_bot_instance.send_message.assert_called_once()
+        call_kwargs = fake_bot_instance.send_message.call_args[1]
+        assert "Bash" in call_kwargs["text"]
+        assert "rm -rf /tmp/test" in call_kwargs["text"]
+        assert isinstance(call_kwargs["reply_markup"], InlineKeyboardMarkup)
+
+
+@pytest.mark.asyncio
+async def test_approve_callback_resolves_approval():
+    """Clicking Approve resolves the pending approval as allow."""
+    from lailabot.approval_server import ApprovalServer
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = make_bot(tmp)
+
+        approval_server = mock.MagicMock(spec=ApprovalServer)
+        bot.approval_server = approval_server
+
+        # Simulate a callback query from the authorized user clicking "Approve"
+        update = mock.AsyncMock()
+        update.callback_query.from_user.id = 12345
+        update.callback_query.data = "approve:approval-456"
+        ctx = make_context()
+
+        await bot.handle_approval_callback(update, ctx)
+
+        approval_server.resolve.assert_called_once_with("approval-456", allow=True)
+        update.callback_query.answer.assert_called_once_with("Approved")
+
+
+@pytest.mark.asyncio
+async def test_deny_callback_resolves_approval():
+    """Clicking Deny resolves the pending approval as deny."""
+    from lailabot.approval_server import ApprovalServer
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = make_bot(tmp)
+
+        approval_server = mock.MagicMock(spec=ApprovalServer)
+        bot.approval_server = approval_server
+
+        update = mock.AsyncMock()
+        update.callback_query.from_user.id = 12345
+        update.callback_query.data = "deny:approval-789"
+        ctx = make_context()
+
+        await bot.handle_approval_callback(update, ctx)
+
+        approval_server.resolve.assert_called_once_with("approval-789", allow=False)
+        update.callback_query.answer.assert_called_once_with("Denied")

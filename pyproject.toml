@@ -19,6 +19,7 @@ dev = [
 
 [project.scripts]
 lailabot = "lailabot.__main__:main"
+lailabot-approval-hook = "lailabot.approval_hook:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
