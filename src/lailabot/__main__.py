@@ -11,6 +11,7 @@ from telegram.ext import (
     TypeHandler,
     filters,
 )
+from telegram.request import HTTPXRequest
 
 from lailabot.approval_server import ApprovalServer
 from lailabot.telegram_bot import LailaBot
@@ -45,7 +46,14 @@ def main():
     approval_server.on_request = bot.handle_approval_request
     bot.approval_server = approval_server
 
-    app = ApplicationBuilder().token(bot_token).concurrent_updates(True).build()
+    request = HTTPXRequest(read_timeout=30, write_timeout=30, connect_timeout=15)
+    app = (
+        ApplicationBuilder()
+        .token(bot_token)
+        .concurrent_updates(True)
+        .request(request)
+        .build()
+    )
 
     bot._telegram_bot = app.bot
 

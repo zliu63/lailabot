@@ -1,8 +1,10 @@
+import asyncio
 import json
 import logging
 import os
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import TimedOut, NetworkError
 
 from lailabot.session_manager import SessionManager
 from lailabot.claude_code_runner import ClaudeCodeRunner
@@ -193,16 +195,27 @@ class LailaBot:
 
         logger.info(f"[{approval_id}] Sending approval request to Telegram: {tool_name}")
 
-        try:
-            await self._telegram_bot.send_message(
-                chat_id=self.authorized_user_id,
-                text=text,
-                reply_markup=keyboard,
-            )
-            logger.info(f"[{approval_id}] Telegram message sent successfully")
-        except Exception:
-            logger.exception(f"[{approval_id}] Failed to send Telegram message")
-            raise
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                await self._telegram_bot.send_message(
+                    chat_id=self.authorized_user_id,
+                    text=text,
+                    reply_markup=keyboard,
+                )
+                logger.info(f"[{approval_id}] Telegram message sent successfully")
+                return
+            except (TimedOut, NetworkError) as e:
+                if attempt < max_retries:
+                    delay = attempt * 2
+                    logger.warning(
+                        f"[{approval_id}] Telegram send attempt {attempt}/{max_retries} "
+                        f"failed ({type(e).__name__}), retrying in {delay}s..."
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.exception(f"[{approval_id}] Failed to send Telegram message after {max_retries} attempts")
+                    raise
 
     async def handle_approval_callback(self, update, context):
         query = update.callback_query
