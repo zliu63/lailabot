@@ -48,8 +48,7 @@ async def test_happy_path_approve(server):
     assert received[0][1] == request
 
     # Response has correct PreToolUse format
-    decision = response["hookSpecificOutput"]["decision"]
-    assert decision["behavior"] == "allow"
+    assert response["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
 @pytest.mark.asyncio
@@ -69,5 +68,4 @@ async def test_timeout_returns_deny(server):
     await writer.wait_closed()
 
     response = json.loads(response_line)
-    decision = response["hookSpecificOutput"]["decision"]
-    assert decision["behavior"] == "deny"
+    assert response["hookSpecificOutput"]["permissionDecision"] == "deny"

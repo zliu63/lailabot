@@ -41,7 +41,7 @@ async def test_hook_script_sends_request_and_receives_decision(server):
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, "LAILABOT_SOCKET": server.socket_path},
+        env={**os.environ, "LAILABOT_SOCKET": server.socket_path, "LAILABOT_SESSION": "1"},
     )
     stdout, stderr = await asyncio.wait_for(
         proc.communicate(hook_input.encode()), timeout=5
@@ -50,5 +50,4 @@ async def test_hook_script_sends_request_and_receives_decision(server):
     assert proc.returncode == 0, f"Hook failed: {stderr.decode()}"
 
     output = json.loads(stdout.decode())
-    decision = output["hookSpecificOutput"]["decision"]
-    assert decision["behavior"] == "allow"
+    assert output["hookSpecificOutput"]["permissionDecision"] == "allow"

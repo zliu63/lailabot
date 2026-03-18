@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -6,6 +7,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from lailabot.session_manager import SessionManager
 from lailabot.claude_code_runner import ClaudeCodeRunner
 from lailabot.message_formatter import split_message
+
+logger = logging.getLogger(__name__)
 
 
 class LailaBot:
@@ -188,27 +191,51 @@ class LailaBot:
             ]
         ])
 
-        await self._telegram_bot.send_message(
-            chat_id=self.authorized_user_id,
-            text=text,
-            reply_markup=keyboard,
-        )
+        logger.info(f"[{approval_id}] Sending approval request to Telegram: {tool_name}")
+
+        try:
+            await self._telegram_bot.send_message(
+                chat_id=self.authorized_user_id,
+                text=text,
+                reply_markup=keyboard,
+            )
+            logger.info(f"[{approval_id}] Telegram message sent successfully")
+        except Exception:
+            logger.exception(f"[{approval_id}] Failed to send Telegram message")
+            raise
 
     async def handle_approval_callback(self, update, context):
         query = update.callback_query
-        if not self._is_authorized(query.from_user.id):
+        user_id = query.from_user.id
+        data = query.data
+
+        logger.info(f"Callback received: data={data!r} from user={user_id}")
+
+        if not self._is_authorized(user_id):
+            logger.warning(f"Unauthorized callback from user={user_id}")
             return
 
-        data = query.data
         if not data or ":" not in data:
+            logger.warning(f"Invalid callback data: {data!r}")
             return
 
         action, approval_id = data.split(":", 1)
         allow = action == "approve"
 
-        if self.approval_server:
-            self.approval_server.resolve(approval_id, allow=allow)
+        logger.info(f"[{approval_id}] User chose: {action}")
 
-        label = "Approved" if allow else "Denied"
-        await query.answer(label)
+        resolved = False
+        if self.approval_server:
+            resolved = self.approval_server.resolve(approval_id, allow=allow)
+            logger.info(f"[{approval_id}] resolve() returned {resolved}")
+        else:
+            logger.error(f"[{approval_id}] No approval_server attached!")
+
+        if resolved:
+            label = "Approved" if allow else "Denied"
+            await query.answer(label)
+        else:
+            await query.answer("Expired (stale button)", show_alert=True)
+
         await query.edit_message_reply_markup(reply_markup=None)
+        logger.info(f"[{approval_id}] Telegram UI updated")

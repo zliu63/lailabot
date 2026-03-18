@@ -88,6 +88,100 @@ launchctl unload ~/Library/LaunchAgents/com.lailabot.plist
 rm ~/Library/LaunchAgents/com.lailabot.plist
 ```
 
+## Remote Approval (Permission Requests)
+
+When Claude Code needs permission to run a tool (e.g. execute a Bash command, write a file), LailaBot can forward the request to Telegram so you can approve or deny it remotely.
+
+### How it works
+
+1. Claude Code triggers a `PreToolUse` hook before executing a tool
+2. The hook script (`lailabot-approval-hook`) forwards the request to LailaBot via a Unix socket
+3. LailaBot sends you a Telegram message with **Approve** / **Deny** buttons
+4. You tap a button, and the decision is sent back to Claude Code
+
+### Setup
+
+**Step 1: Install lailabot** (this also installs the `lailabot-approval-hook` command)
+
+```bash
+pip install -e .
+```
+
+Verify the hook script is available:
+
+```bash
+which lailabot-approval-hook
+```
+
+**Step 2: Configure Claude Code hooks**
+
+Add the following to your **global** Claude Code settings at `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "lailabot-approval-hook",
+            "timeout": 600
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+> **Tip:** If you only want approval for dangerous tools, change `"matcher": ""` to `"matcher": "Bash|Write|Edit"`. An empty matcher matches all tools.
+
+**Step 3: (Optional) Custom socket path**
+
+By default the approval server listens on `/tmp/lailabot-approval.sock`. To change it, set `LAILABOT_SOCKET` in your environment:
+
+```bash
+export LAILABOT_SOCKET="/tmp/my-custom.sock"
+```
+
+Both LailaBot and the hook script read this variable.
+
+If you use the launchd daemon, add it to the `EnvironmentVariables` section of `com.lailabot.plist`.
+
+### Verifying
+
+1. Start LailaBot (manually or via launchd)
+2. Open a Claude Code session that triggers a tool (e.g. ask it to run a command)
+3. You should receive a Telegram message like:
+
+```
+Permission Request
+
+Tool: Bash
+Input:
+{
+  "command": "ls -la"
+}
+
+[Approve] [Deny]
+```
+
+4. Tap **Approve** or **Deny** — Claude Code will proceed or abort accordingly
+
+### Troubleshooting
+
+- **Hook not triggered**: Make sure `~/.claude/settings.json` has the `hooks` config and restart Claude Code
+- **Hook fails to connect**: Check that LailaBot is running and the socket file exists (`ls /tmp/lailabot-approval.sock`)
+- **No Telegram message**: Check LailaBot logs (`~/.lailabot/logs/lailabot.log`)
+- **Test the hook manually**:
+  ```bash
+  # Start LailaBot first, then in another terminal:
+  echo '{"tool_name":"Bash","tool_input":{"command":"ls"}}' | lailabot-approval-hook
+  ```
+  You should see an approval message in Telegram. After you tap Approve/Deny, the command will print the decision JSON.
+
 ## Telegram Commands
 
 | Command | Description |

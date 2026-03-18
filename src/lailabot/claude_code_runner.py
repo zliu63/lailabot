@@ -24,11 +24,15 @@ class ClaudeCodeRunner:
         if claude_session_id:
             cmd.extend(["--resume", claude_session_id])
 
+        import os
+        env = {**os.environ, "LAILABOT_SESSION": "1"}
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=work_dir,
+            env=env,
         )
 
         session_id = claude_session_id
