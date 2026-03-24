@@ -78,7 +78,8 @@ def main():
     app.add_handler(CommandHandler("kill", bot.handle_kill))
     app.add_handler(CommandHandler("set_default", bot.handle_set_default))
     app.add_handler(CommandHandler("send", bot.handle_send))
-    app.add_handler(CallbackQueryHandler(bot.handle_approval_callback))
+    app.add_handler(CommandHandler("discover", bot.handle_discover))
+    app.add_handler(CallbackQueryHandler(bot.handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
 
     async def post_init(application):

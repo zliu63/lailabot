@@ -1,6 +1,61 @@
+import glob
 import json
 import os
 import time
+
+CLAUDE_SESSIONS_DIR = "~/.claude/sessions"
+
+
+def discover_claude_sessions(sessions_dir: str = CLAUDE_SESSIONS_DIR) -> list[dict]:
+    """Discover all running Claude Code sessions from filesystem metadata."""
+    sessions_dir = os.path.expanduser(sessions_dir)
+    if not os.path.isdir(sessions_dir):
+        return []
+
+    results = []
+    for filepath in glob.glob(os.path.join(sessions_dir, "*.json")):
+        try:
+            with open(filepath) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        pid = data.get("pid")
+        session_id = data.get("sessionId")
+        cwd = data.get("cwd")
+        if not pid or not session_id or not cwd:
+            continue
+
+        try:
+            os.kill(pid, 0)
+        except (OSError, ProcessLookupError):
+            continue
+
+        results.append({
+            "pid": pid,
+            "session_id": session_id,
+            "cwd": cwd,
+            "started_at": data.get("startedAt", 0),
+        })
+
+    results.sort(key=lambda x: x["started_at"], reverse=True)
+    return results
+
+
+def _find_cwd_for_session(claude_session_id: str) -> str | None:
+    """Look up the cwd for a Claude session ID from session metadata files."""
+    sessions_dir = os.path.expanduser(CLAUDE_SESSIONS_DIR)
+    if not os.path.isdir(sessions_dir):
+        return None
+    for filepath in glob.glob(os.path.join(sessions_dir, "*.json")):
+        try:
+            with open(filepath) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        if data.get("sessionId") == claude_session_id:
+            return data.get("cwd")
+    return None
 
 
 class SessionManager:
@@ -26,6 +81,29 @@ class SessionManager:
         }
         if self._default_id is None:
             self._default_id = sid
+        self._save()
+        return sid
+
+    def attach_session(self, claude_session_id: str) -> int:
+        """Attach to an existing Claude Code session by its session ID.
+
+        Looks up the working directory from Claude's session metadata.
+        """
+        if len(self._sessions) >= self.MAX_SESSIONS:
+            raise ValueError(f"Maximum of {self.MAX_SESSIONS} sessions reached")
+        cwd = _find_cwd_for_session(claude_session_id)
+        if cwd is None:
+            raise ValueError(f"Could not find session {claude_session_id}")
+        sid = self._next_id
+        self._next_id += 1
+        self._sessions[sid] = {
+            "id": sid,
+            "work_dir": cwd,
+            "claude_session_id": claude_session_id,
+            "created_at": time.time(),
+            "attached": True,
+        }
+        self._default_id = sid
         self._save()
         return sid
 

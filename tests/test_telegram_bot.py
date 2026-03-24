@@ -319,7 +319,7 @@ async def test_approve_callback_resolves_approval():
         update.callback_query.data = "approve:approval-456"
         ctx = make_context()
 
-        await bot.handle_approval_callback(update, ctx)
+        await bot.handle_callback(update, ctx)
 
         approval_server.resolve.assert_called_once_with("approval-456", allow=True)
         update.callback_query.answer.assert_called_once_with("Approved")
@@ -341,7 +341,300 @@ async def test_deny_callback_resolves_approval():
         update.callback_query.data = "deny:approval-789"
         ctx = make_context()
 
-        await bot.handle_approval_callback(update, ctx)
+        await bot.handle_callback(update, ctx)
 
         approval_server.resolve.assert_called_once_with("approval-789", allow=False)
         update.callback_query.answer.assert_called_once_with("Denied")
+
+
+# --- Discover + Attach ---
+
+
+@pytest.mark.asyncio
+async def test_discover_shows_sessions_with_pid():
+    """Discover should display PID in button text for disambiguation."""
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = make_bot(tmp)
+        update = make_update("/discover")
+        ctx = make_context()
+
+        fake_sessions = [
+            {"pid": 111, "session_id": "sess-a", "cwd": "/path/project", "started_at": 2000},
+            {"pid": 222, "session_id": "sess-b", "cwd": "/path/project", "started_at": 1000},
+        ]
+        with mock.patch("lailabot.telegram_bot.discover_claude_sessions", return_value=fake_sessions):
+            await bot.handle_discover(update, ctx)
+
+        call_kwargs = update.message.reply_text.call_args[1] if update.message.reply_text.call_args[1] else {}
+        call_args = update.message.reply_text.call_args[0]
+        text = call_args[0]
+        assert "PID 111" in text
+        assert "PID 222" in text
+
+        # Check buttons contain PID
+        keyboard = call_kwargs.get("reply_markup") or update.message.reply_text.call_args[1]["reply_markup"]
+        button_texts = [btn.text for row in keyboard.inline_keyboard for btn in row]
+        assert any("PID 111" in t for t in button_texts)
+        assert any("PID 222" in t for t in button_texts)
+
+
+@pytest.mark.asyncio
+async def test_discover_filters_already_attached():
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = make_bot(tmp)
+        # Pre-create a session with claude_session_id "sess-a"
+        bot.session_manager.create_session("/path/a")
+        bot.session_manager.update_claude_session_id(1, "sess-a")
+
+        update = make_update("/discover")
+        ctx = make_context()
+
+        fake_sessions = [
+            {"pid": 111, "session_id": "sess-a", "cwd": "/path/a", "started_at": 2000},
+            {"pid": 222, "session_id": "sess-b", "cwd": "/path/b", "started_at": 1000},
+        ]
+        with mock.patch("lailabot.telegram_bot.discover_claude_sessions", return_value=fake_sessions):
+            await bot.handle_discover(update, ctx)
+
+        text = update.message.reply_text.call_args[0][0]
+        # sess-a should be filtered out, only sess-b shown
+        assert "PID 222" in text
+        assert "PID 111" not in text
+
+
+@pytest.mark.asyncio
+async def test_discover_no_sessions_found():
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = make_bot(tmp)
+        update = make_update("/discover")
+        ctx = make_context()
+
+        with mock.patch("lailabot.telegram_bot.discover_claude_sessions", return_value=[]):
+            await bot.handle_discover(update, ctx)
+
+        reply = update.message.reply_text.call_args[0][0]
+        assert "no running" in reply.lower() or "No running" in reply
+
+
+@pytest.mark.asyncio
+async def test_attach_callback_creates_session_and_sets_default():
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = make_bot(tmp)
+        bot.session_manager.create_session("/existing")  # session 1, default
+
+        bot._discovered_sessions = [
+            {"pid": 111, "session_id": "sess-new", "cwd": "/new/project", "started_at": 2000},
+        ]
+
+        update = mock.AsyncMock()
+        update.callback_query.from_user.id = 12345
+        update.callback_query.data = "attach:0"
+        ctx = make_context()
+
+        with mock.patch("lailabot.session_manager._find_cwd_for_session", return_value="/new/project"):
+            await bot.handle_callback(update, ctx)
+
+        # Should have created session 2 and set it as default
+        assert bot.session_manager.get_default_session()["id"] == 2
+        session = bot.session_manager.get_session(2)
+        assert session["claude_session_id"] == "sess-new"
+        assert session["attached"] is True
+        update.callback_query.answer.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_attach_callback_expired_index():
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = make_bot(tmp)
+        bot._discovered_sessions = []  # empty / expired
+
+        update = mock.AsyncMock()
+        update.callback_query.from_user.id = 12345
+        update.callback_query.data = "attach:5"
+        ctx = make_context()
+
+        await bot.handle_callback(update, ctx)
+
+        update.callback_query.answer.assert_called_once()
+        answer_args = update.callback_query.answer.call_args
+        assert "expired" in answer_args[0][0].lower() or "Expired" in answer_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_list_shows_attached_marker():
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = make_bot(tmp)
+        bot.session_manager.create_session("/normal")
+
+        # Manually add an attached session
+        bot.session_manager._sessions[2] = {
+            "id": 2, "work_dir": "/attached", "claude_session_id": "sess-x",
+            "created_at": 0, "attached": True,
+        }
+        bot.session_manager._next_id = 3
+        bot.session_manager._save()
+
+        update = make_update("/list")
+        ctx = make_context()
+        await bot.handle_list(update, ctx)
+
+        reply = update.message.reply_text.call_args[0][0]
+        assert "[attached]" in reply
+        # The non-attached session should NOT have the marker
+        lines = reply.strip().split("\n")
+        normal_line = [l for l in lines if "/normal" in l][0]
+        assert "[attached]" not in normal_line
+
+
+# --- Always Allow ---
+
+
+def test_derive_pattern_bash():
+    pattern = LailaBot._derive_pattern("Bash", {"command": "git status"})
+    assert pattern == "Bash:git"
+
+
+def test_derive_pattern_bash_complex_command():
+    pattern = LailaBot._derive_pattern("Bash", {"command": "npm run test --watch"})
+    assert pattern == "Bash:npm"
+
+
+def test_derive_pattern_bash_empty_command():
+    pattern = LailaBot._derive_pattern("Bash", {"command": ""})
+    assert pattern == "Bash"
+
+
+def test_derive_pattern_non_bash():
+    pattern = LailaBot._derive_pattern("Edit", {"file_path": "/foo.py"})
+    assert pattern == "Edit"
+
+
+def test_pattern_display():
+    assert LailaBot._pattern_display("Bash:git") == "Bash(git:*)"
+    assert LailaBot._pattern_display("Edit") == "Edit"
+
+
+def test_matches_allowlist_exact_tool():
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = make_bot(tmp)
+        bot._session_allowlist["sess-1"] = {"Edit"}
+
+        assert bot._matches_allowlist("sess-1", "Edit", {}) is True
+        assert bot._matches_allowlist("sess-1", "Read", {}) is False
+        assert bot._matches_allowlist("sess-2", "Edit", {}) is False
+
+
+def test_matches_allowlist_bash_pattern():
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = make_bot(tmp)
+        bot._session_allowlist["sess-1"] = {"Bash:git"}
+
+        assert bot._matches_allowlist("sess-1", "Bash", {"command": "git status"}) is True
+        assert bot._matches_allowlist("sess-1", "Bash", {"command": "git push"}) is True
+        assert bot._matches_allowlist("sess-1", "Bash", {"command": "rm -rf /"}) is False
+        assert bot._matches_allowlist("sess-1", "Bash", {"command": ""}) is False
+
+
+@pytest.mark.asyncio
+async def test_approval_request_auto_approves_when_allowlisted():
+    from lailabot.approval_server import ApprovalServer
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = make_bot(tmp)
+        approval_server = mock.MagicMock(spec=ApprovalServer)
+        bot.approval_server = approval_server
+        bot._telegram_bot = mock.AsyncMock()
+
+        # Add git to allowlist for this session
+        bot._session_allowlist["claude-sess-1"] = {"Bash:git"}
+
+        request_data = {
+            "session_id": "claude-sess-1",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git diff"},
+        }
+
+        await bot.handle_approval_request("approval-auto", request_data)
+
+        # Should auto-approve without sending Telegram message
+        approval_server.resolve.assert_called_once_with("approval-auto", allow=True)
+        bot._telegram_bot.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_approval_request_sends_always_allow_button():
+    from telegram import InlineKeyboardMarkup
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = make_bot(tmp)
+        bot._telegram_bot = mock.AsyncMock()
+
+        request_data = {
+            "session_id": "claude-sess-1",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git push origin main"},
+        }
+
+        await bot.handle_approval_request("approval-btn", request_data)
+
+        call_kwargs = bot._telegram_bot.send_message.call_args[1]
+        keyboard = call_kwargs["reply_markup"]
+        assert isinstance(keyboard, InlineKeyboardMarkup)
+
+        # Should have 2 rows: [Approve, Deny] and [Always Allow ...]
+        assert len(keyboard.inline_keyboard) == 2
+        always_btn = keyboard.inline_keyboard[1][0]
+        assert "Always Allow" in always_btn.text
+        assert "Bash(git:*)" in always_btn.text
+        assert always_btn.callback_data == "always:approval-btn"
+
+
+@pytest.mark.asyncio
+async def test_always_allow_callback_adds_to_allowlist_and_resolves():
+    from lailabot.approval_server import ApprovalServer
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = make_bot(tmp)
+        approval_server = mock.MagicMock(spec=ApprovalServer)
+        bot.approval_server = approval_server
+
+        # Simulate a pending request
+        bot._pending_requests["approval-aa"] = {
+            "session_id": "claude-sess-1",
+            "tool_name": "Bash",
+            "tool_input": {"command": "npm test"},
+        }
+
+        update = mock.AsyncMock()
+        update.callback_query.from_user.id = 12345
+        update.callback_query.data = "always:approval-aa"
+        ctx = make_context()
+
+        await bot.handle_callback(update, ctx)
+
+        # Should resolve the approval
+        approval_server.resolve.assert_called_once_with("approval-aa", allow=True)
+
+        # Should add pattern to session allowlist
+        assert "Bash:npm" in bot._session_allowlist["claude-sess-1"]
+
+        # Should clean up pending request
+        assert "approval-aa" not in bot._pending_requests
+
+
+@pytest.mark.asyncio
+async def test_always_allow_callback_expired():
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = make_bot(tmp)
+        # No pending request for this ID
+
+        update = mock.AsyncMock()
+        update.callback_query.from_user.id = 12345
+        update.callback_query.data = "always:expired-id"
+        ctx = make_context()
+
+        await bot.handle_callback(update, ctx)
+
+        update.callback_query.answer.assert_called_once()
+        answer_args = update.callback_query.answer.call_args
+        assert "expired" in answer_args[0][0].lower() or "Expired" in answer_args[0][0]
